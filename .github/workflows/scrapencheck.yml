@@ -1,0 +1,212 @@
+name: Scrape and Check Proxies
+
+on:
+  schedule:
+    # Runs "at minute 55 past every hour" (see https://crontab.guru)
+    - cron: '55 * * * *'
+  workflow_dispatch:
+  
+jobs:
+  scrapencheck:
+    if: github.repository_owner == 'PrxyHunter'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          repository: 'PrxyHunter/Phunter'
+          token: ${{ secrets.GH_TOKEN }}
+          path: './phunterrepo/'
+          ref: 'master'
+
+      - name: Setup .NET Core SDK ${{ matrix.dotnet-version }}
+        uses: actions/setup-dotnet@v2
+        with:
+          dotnet-version: 6.0.x
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          cd ./phunterrepo/
+          dotnet restore
+
+      - name: Build
+        shell: bash
+        run: |
+          release_name="Phunter-selfcontained-ref-master-linux-x64"
+          
+          # Build everything
+          dotnet publish ./phunterrepo/Phunter/Phunter.csproj --framework net6.0 --runtime "linux-x64" -c Release -o "$release_name" "--self-contained"
+
+      - name: Install Playwright
+        shell: bash
+        run: |
+          cd Phunter-selfcontained-ref-master-linux-x64/
+          
+          # Install Playwright
+          .playwright/node/linux/playwright.sh install
+          .playwright/node/linux/playwright.sh install-deps
+
+      - name: Test Phunter
+        shell: bash
+        run: |
+          cd Phunter-selfcontained-ref-master-linux-x64/
+          
+          # Test Phunter
+          ./Phunter --help
+
+      - name: Download latest GeoLite2-City.mmdb
+        uses: dsaltares/fetch-gh-release-asset@master
+        with:
+          repo: 'PrxyHunter/GeoLite2'
+          file: 'GeoLite2-City.mmdb'
+          target: 'Phunter-selfcontained-ref-master-linux-x64/GeoLite2-City.mmdb'
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Download latest GeoLite2-ASN.mmdb
+        uses: dsaltares/fetch-gh-release-asset@master
+        with:
+          repo: 'PrxyHunter/GeoLite2'
+          file: 'GeoLite2-ASN.mmdb'
+          target: 'Phunter-selfcontained-ref-master-linux-x64/GeoLite2-ASN.mmdb'
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Download latest GeoLite2-Country-Blocks-IPv4.csv
+        uses: dsaltares/fetch-gh-release-asset@master
+        with:
+          repo: 'PrxyHunter/GeoLite2'
+          file: 'GeoLite2-Country-Blocks-IPv4.csv'
+          target: 'Phunter-selfcontained-ref-master-linux-x64/GeoLite2-Country-Blocks-IPv4.csv'
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Download latest GeoLite2-Country-Locations-en.csv
+        uses: dsaltares/fetch-gh-release-asset@master
+        with:
+          repo: 'PrxyHunter/GeoLite2'
+          file: 'GeoLite2-Country-Locations-en.csv'
+          target: 'Phunter-selfcontained-ref-master-linux-x64/GeoLite2-Country-Locations-en.csv'
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Run Phunter
+        shell: bash
+        run: |
+          cd Phunter-selfcontained-ref-master-linux-x64/
+          
+          # Run Phunter
+          ./Phunter scrapencheck -j -r 0 --timeout 10000 --send-timeout 5000 --threads=300 --url="https://www.google.com/?hl=en" --url="https://duckduckgo.com/" --url="http://example.com/" --user-agent="Mozilla/5.0 (Linux x86_64; rv:102.0) Gecko/20100101 Firefox/102.0" --http-method=GET --success-http-code=200 --quite
+
+      - name: List Results
+        shell: bash
+        run: |
+          cd Phunter-selfcontained-ref-master-linux-x64/
+          
+          # List Results
+          ls Phunter.Checker/
+      
+      - name: List Scraper Results
+        shell: bash
+        run: |
+          cd Phunter-selfcontained-ref-master-linux-x64/
+          
+          # List Scraper Results
+          ls Phunter.Scraper/
+
+      - name: Set Results dir
+        run: echo "RESULTS_DIR=$(ls ./Phunter-selfcontained-ref-master-linux-x64/Phunter.Checker/ | sed -n 1p)" >> $GITHUB_ENV
+
+      - name: Set Scraper Results dir
+        run: echo "SCRAPER_RESULTS_DIR=$(ls ./Phunter-selfcontained-ref-master-linux-x64/Phunter.Scraper/ | sed -n 1p)" >> $GITHUB_ENV
+
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        with:
+          repository: 'PrxyHunter/Proxylist'
+          token: ${{ secrets.GH_TOKEN }}
+          path: './therepo/'
+          ref: 'master'
+          
+      - name: Delete older proxies
+        shell: bash
+        run: |
+          rm -rf ./therepo/HTTP.txt
+          rm -rf ./therepo/SOCKS4.txt
+          rm -rf ./therepo/SOCKS5.txt
+          rm -rf ./therepo/Json
+          rm -rf ./therepo/Scraped
+
+      - name: Copy results to current directory
+        shell: bash
+        run: 'cp -f -a -r "./Phunter-selfcontained-ref-master-linux-x64/Phunter.Checker/$RESULTS_DIR/." ./therepo'
+
+      - name: Copy scraper results to current directory
+        shell: bash
+        run: 'cp -f -a -r "./Phunter-selfcontained-ref-master-linux-x64/Phunter.Scraper/$SCRAPER_RESULTS_DIR/." ./therepo/Scraped'
+
+      - name: Set environment variable
+        run: |
+          if [ -f ./therepo/HTTP.txt ]; then
+            echo "HTTP_COUNTS=$(wc -l < ./therepo/HTTP.txt)" >> $GITHUB_ENV
+          else 
+            echo "HTTP_COUNTS=0" >> $GITHUB_ENV
+          fi
+
+          if [ -f ./therepo/SOCKS4.txt ]; then
+            echo "SOCKS4_COUNTS=$(wc -l < ./therepo/SOCKS4.txt)" >> $GITHUB_ENV
+          else 
+            echo "SOCKS4_COUNTS=0" >> $GITHUB_ENV
+          fi
+
+          if [ -f ./therepo/SOCKS5.txt ]; then
+            echo "SOCKS5_COUNTS=$(wc -l < ./therepo/SOCKS5.txt)" >> $GITHUB_ENV
+          else 
+            echo "SOCKS5_COUNTS=0" >> $GITHUB_ENV
+          fi
+
+          if [ -f ./therepo/Scraped/HTTP.txt ]; then
+            echo "SCRAPED_HTTP_COUNTS=$(wc -l < ./therepo/Scraped/HTTP.txt)" >> $GITHUB_ENV
+          else 
+            echo "SCRAPED_HTTP_COUNTS=0" >> $GITHUB_ENV
+          fi
+
+          if [ -f ./therepo/Scraped/SOCKS4.txt ]; then
+            echo "SCRAPED_SOCKS4_COUNTS=$(wc -l < ./therepo/Scraped/SOCKS4.txt)" >> $GITHUB_ENV
+          else 
+            echo "SCRAPED_SOCKS4_COUNTS=0" >> $GITHUB_ENV
+          fi
+
+          if [ -f ./therepo/Scraped/SOCKS5.txt ]; then
+            echo "SCRAPED_SOCKS5_COUNTS=$(wc -l < ./therepo/Scraped/SOCKS5.txt)" >> $GITHUB_ENV
+          else 
+            echo "SCRAPED_SOCKS5_COUNTS=0" >> $GITHUB_ENV
+          fi
+
+          echo "LAST_CHECK_TIME=$(date -u)" >> $GITHUB_ENV
+
+
+      - name: Update README.md
+        shell: bash
+        run: |
+          touch ./therepo/README.md
+          cat <<EOT > ./therepo/README.md
+          # Proxylist
+          Fresh automatically scraped and checked (Google Passed) proxies.<br /><br />
+          ### Counts
+          HTTP/s Proxies: ${{ env.HTTP_COUNTS }}<br />
+          SOCKS4 Proxies: ${{ env.SOCKS4_COUNTS }}<br />
+          SOCKS5 Proxies: ${{ env.SOCKS5_COUNTS }}<br />
+          ### Scraped Counts
+          Scraped HTTP/s Proxies: ${{ env.SCRAPED_HTTP_COUNTS }}<br />
+          Scraped SOCKS4 Proxies: ${{ env.SCRAPED_SOCKS4_COUNTS }}<br />
+          Scraped SOCKS5 Proxies: ${{ env.SCRAPED_SOCKS5_COUNTS }}<br />
+          ### Time
+          Last scrape and check time: ${{ env.LAST_CHECK_TIME }}
+          EOT
+
+      - name: Commit the proxies
+        uses: EndBug/add-and-commit@v9
+        with:
+          default_author: github_actions
+          message: 'Update proxies'
+          add: '. --force'
+          cwd: './therepo/'
+          push: true
